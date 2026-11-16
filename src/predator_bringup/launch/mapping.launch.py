@@ -16,12 +16,7 @@ def generate_launch_description():
         DeclareLaunchArgument("drive", default_value="false"),
         DeclareLaunchArgument("imu", default_value="true"),
         DeclareLaunchArgument("mapping_rviz", default_value="true"),
-        DeclareLaunchArgument("imu_x", default_value="0.0"),
-        DeclareLaunchArgument("imu_y", default_value="-0.1"),
-        DeclareLaunchArgument("imu_z", default_value="0.0"),
-        DeclareLaunchArgument("imu_roll", default_value="0.0"),
-        DeclareLaunchArgument("imu_pitch", default_value="0.0"),
-        DeclareLaunchArgument("imu_yaw", default_value="0.0"),
+        # imu_x、imu_roll 等安裝位置參數由 robot.launch.py 宣告，在這裡一樣可以指定。
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(share / "launch" / "robot.launch.py")),
             launch_arguments={
@@ -29,20 +24,8 @@ def generate_launch_description():
                 "imu": LaunchConfiguration("imu"),
                 "wheel_odom_topic": "/wheel/odom",
                 "publish_wheel_tf": "false",
+                "ekf": "false",   # 建圖自己啟動下面那個 EKF，避免兩個 EKF 同時發佈 TF
             }.items(),
-        ),
-        Node(
-            package="tf2_ros", executable="static_transform_publisher",
-            arguments=[
-                "--x", LaunchConfiguration("imu_x"),
-                "--y", LaunchConfiguration("imu_y"),
-                "--z", LaunchConfiguration("imu_z"),
-                "--roll", LaunchConfiguration("imu_roll"),
-                "--pitch", LaunchConfiguration("imu_pitch"),
-                "--yaw", LaunchConfiguration("imu_yaw"),
-                "--frame-id", "base_link", "--child-frame-id", "imu_link",
-            ],
-            condition=IfCondition(LaunchConfiguration("imu")),
         ),
         Node(
             package="robot_localization", executable="ekf_node", name="ekf_filter_node",

@@ -163,6 +163,18 @@ ros2 launch predator_bringup robot.launch.py odom:=true drive:=true drive_source
 
 想先測試 Nav2 而不讓車子移動，把 `drive:=true` 改成 `drive:=false`。
 
+這個指令只用輪速里程計，所以關掉 IMU。要用 IMU 修正轉向（例如輪子打滑時），
+改用 `ekf:=true` 並開啟 IMU：
+
+```bash
+ros2 launch predator_bringup robot.launch.py odom:=true drive:=true drive_source:=nav2 imu:=true ekf:=true rviz:=false
+```
+
+`ekf:=true` 時，底盤節點改發佈 `/wheel/odom` 且不發佈 TF。EKF 融合 `/wheel/odom`
+的平面速度與 `/imu/gyro` 的偏航角速度，輸出到 `/odom` 並發佈 `odom → base_link`，
+所以 Nav2 與 AMCL 的設定不用改。EKF 與建圖共用 `predator_bringup/config/ekf.yaml`。
+第一次使用前，先照[確認 IMU 轉向方向](#確認-imu-轉向方向)檢查正負號。
+
 第二個終端機啟動 Nav2 與 RViz2：
 
 ```bash
@@ -187,6 +199,30 @@ ros2 launch nav2_bringup teco_navigation.launch.py map:=/完整路徑/地圖.yam
 
 實車導航前，先取消任何現有目標並停止舊的 Nav2 和底盤程序，確認車身外廓
 （`robot_radius: 0.22`）與成本地圖設定相符。
+
+### 確認 IMU 轉向方向
+
+EKF 直接採用 IMU 的 Z 軸角速度。IMU 的正負號若與輪速相反，兩者會互相抵消，
+轉向估計就會出錯。要讓車子在地面上實際轉動才看得出來，架高車輪時 IMU 量不到轉動，
+所以請在空曠處進行並備妥急停。用鍵盤模式啟動底盤：
+
+```bash
+ros2 launch predator_bringup robot.launch.py drive:=true drive_source:=keyboard imu:=true ekf:=true rviz:=false
+```
+
+另外兩個終端機分別觀察輪速與 IMU 的偏航角速度：
+
+```bash
+ros2 topic echo /wheel/odom --field twist.twist.angular.z
+```
+
+```bash
+ros2 topic echo /imu/gyro --field angular_velocity.z
+```
+
+再用 `keyboard_teleop` 按住 `A` 左轉。兩個數值都應該是正的，而且大小相近（約 0.3）。
+IMU 是負的代表它的 Z 軸朝下，啟動時加上 `imu_roll:=3.14159` 翻轉 IMU 座標，再確認
+`/odom` 的 `twist.twist.angular.z` 與 `/wheel/odom` 同號。建圖時也要用同一個 `imu_roll`。
 
 ## 鍵盤與 Nav2 共用底盤
 
@@ -225,9 +261,12 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 | `drive` | `true` | 允許送出馬達指令。`false` 時只讀輪速 |
 | `drive_source` | `keyboard` | 速度指令來源：`keyboard`、`nav2` 或 `both` |
 | `base_port` | `/dev/ttyS0` | 底盤序列埠 |
-| `wheel_odom_topic` | `/odom` | 輪速里程計的話題名稱 |
-| `publish_wheel_tf` | `true` | 由底盤節點發佈 `odom → base_link` |
-| `imu` | `true` | 啟動 LPMS-ME1 驅動 |
+| `wheel_odom_topic` | `/odom` | 輪速里程計的話題名稱。`ekf:=true` 時固定為 `/wheel/odom` |
+| `publish_wheel_tf` | `true` | 由底盤節點發佈 `odom → base_link`。`ekf:=true` 時固定為 `false` |
+| `imu` | `true` | 啟動 LPMS-ME1 驅動與 `base_link → imu_link` |
+| `imu_x` / `imu_y` / `imu_z` | `0.0` / `-0.1` / `0.0` | IMU 相對 `base_link` 的位置（公尺） |
+| `imu_roll` / `imu_pitch` / `imu_yaw` | `0.0` | IMU 的安裝角（弧度） |
+| `ekf` | `false` | 用 EKF 融合輪速與 IMU，輸出到 `/odom`。需要搭配 `imu:=true` |
 | `rviz` | `true` | 啟動 RViz2 |
 | `joy` | `false` | 啟動 `joy_node`。手把沒有接到馬達控制 |
 
@@ -238,11 +277,10 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 | `drive` | `false` | 允許送出馬達指令 |
 | `imu` | `true` | 啟動 IMU 並納入 EKF |
 | `mapping_rviz` | `true` | 啟動建圖用的 RViz2 |
-| `imu_x` / `imu_y` / `imu_z` | `0.0` / `-0.1` / `0.0` | IMU 相對 `base_link` 的位置（公尺） |
-| `imu_roll` / `imu_pitch` / `imu_yaw` | `0.0` | IMU 的安裝角（弧度） |
 
-建圖時底盤節點改發佈 `/wheel/odom` 且不發佈 TF，`odom → base_link` 由 EKF 負責。
-`lidar_x` 等光達參數也可以在這個啟動檔使用。
+建圖時底盤節點改發佈 `/wheel/odom` 且不發佈 TF，`odom → base_link` 由建圖自己的 EKF
+負責，輸出到 `/odometry/filtered`。`robot.launch.py` 的 `imu_x`、`imu_roll`、`lidar_x`
+等安裝位置參數也可以在這個啟動檔使用。`ekf` 參數在建圖時無效。
 
 ### `teco_navigation.launch.py`
 
@@ -258,8 +296,9 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 | 話題 | 發佈者 | 說明 |
 |---|---|---|
 | `/scan` | `sick_scan_xd` | 光達掃描，角度 −1.57 到 +1.57 rad |
-| `/odom` | `odom_control` | 輪速里程計。建圖時改為 `/wheel/odom` |
-| `/odometry/filtered` | `ekf_filter_node` | 融合後的里程計，只在建圖時啟動 |
+| `/odom` | `odom_control`，或 `ekf:=true` 時的 `ekf_filter_node` | Nav2 與 AMCL 使用的里程計 |
+| `/wheel/odom` | `odom_control` | 輪速里程計，只在 `ekf:=true` 或建圖時使用 |
+| `/odometry/filtered` | `ekf_filter_node` | 建圖時融合後的里程計 |
 | `/imu/data_raw` | `lpms_imu` | 角速度與加速度 |
 | `/imu/gyro` | `lpms_imu` | 給 EKF 使用的偏航角速度 |
 | `/diagnostics` | `hardware_inventory` | 設備是否存在與存取權限 |
@@ -274,6 +313,8 @@ keyboard_teleop ─ keyboard/cmd_vel ──────────────�
 ```
 
 座標關係為 `map → odom → base_link`，`base_link` 底下有 `cloud`（光達）與 `imu_link`（IMU）。
+`odom → base_link` 預設由 `odom_control` 發佈，`ekf:=true` 或建圖時改由 EKF 發佈，
+同一時間只有一個來源。
 
 底盤節點對所有來源套用相同的保護：
 
@@ -316,12 +357,19 @@ snake_case。舊 ROS 1 的 `move_base` 與 AMCL 參數沒有移植，導航改�
 
 ## 疑難排解
 
-**序列埠出現權限錯誤。** 存取權限是對目前裝置節點設定的 ACL，重新開機或拔插 IMU
-後會失效，需要重新授權：
+**序列埠出現權限錯誤。** 序列埠屬於 `dialout` 群組。確認目前使用者在群組內：
 
 ```bash
-sudo setfacl -m "u:$(id -un):rw" /dev/ttyS0 /dev/ttyUSB2
+id -nG | grep -w dialout
 ```
+
+沒有輸出的話加入群組，登出再登入後生效：
+
+```bash
+sudo usermod -aG dialout "$(id -un)"
+```
+
+IMU 的 `/dev/ttyUSB*` 編號會隨插拔順序改變，`lpms_imu` 用 `/dev/serial/by-id/` 底下的固定路徑開啟。
 
 **`keyboard_teleop` 顯示 `Drive disabled or offline`。** 底盤沒有訂閱鍵盤指令。
 確認底盤是用 `drive:=true` 啟動，而且 `drive_source` 是 `keyboard` 或 `both`。
@@ -344,7 +392,9 @@ ping -c 3 192.168.0.20
 ## 已知限制
 
 - 實車移動、急停，以及 `drive_source:=both` 的鍵盤與 Nav2 共用，都還沒在實車上驗證。
-- IMU 的安裝方向、姿態和到底盤的座標轉換尚未校正。
+- 導航用的 `ekf:=true` 已在實車上確認接線與原地轉向，還沒實際跑過 Nav2 導航。
+- IMU 的偏航角速度已確認與輪速同號（2026-11-16，`imu_roll:=0.0`，原地左右轉各約 300°，
+  兩者相差 2% 以內）。IMU 的姿態、加速度和安裝位置尚未校正。
 - 鍵盤指令不經過碰撞監控。
 - 手把只會發佈 `/joy`，沒有接到馬達控制。
 
