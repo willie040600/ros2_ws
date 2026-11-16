@@ -19,6 +19,26 @@ from tf2_ros import TransformBroadcaster
 STOP_FRAME_REPEAT = 25
 STOP_FRAME_ON_ERROR = 3
 
+# 指令超過這個秒數沒更新就視為過期（看門狗）。
+COMMAND_TIMEOUT = 0.35
+DRIVE_TOPICS = {"keyboard": "keyboard/cmd_vel", "nav2": "/nav2/cmd_vel_safe"}
+# drive_source 對應的來源，依優先序排列：排前面的來源有未過期的指令時，
+# 後面的來源會被忽略。鍵盤的零速也算指令，所以放開按鍵或按空白鍵能壓過 Nav2。
+DRIVE_SOURCES = {
+    "keyboard": ("keyboard",),
+    "nav2": ("nav2",),
+    "both": ("keyboard", "nav2"),
+}
+
+
+def select_command(commands, sources, now):
+    """回傳優先序最高且未過期的 (linear, angular)，全部過期時回傳零速。"""
+    for source in sources:
+        command, stamp = commands[source]
+        if now - stamp <= COMMAND_TIMEOUT:
+            return command
+    return (0.0, 0.0)
+
 
 def crc(data):
     value = 0xffff
@@ -62,18 +82,22 @@ class TecoOdometry(Node):
         self.declare_parameter("drive_source", "keyboard")
         self.declare_parameter("publish_tf", True)
         self.drive_enabled = self.get_parameter("enable_drive").value
-        self.command = (0.0, 0.0)
-        self.command_time = 0.0
         self.stop_frames = 0
         drive_source = self.get_parameter("drive_source").value
-        drive_topics = {"keyboard": "keyboard/cmd_vel", "nav2": "/nav2/cmd_vel_safe"}
-        if drive_source not in drive_topics:
-            raise ValueError("drive_source must be keyboard or nav2")
+        if drive_source not in DRIVE_SOURCES:
+            raise ValueError("drive_source must be keyboard, nav2 or both")
+        self.drive_sources = DRIVE_SOURCES[drive_source]
+        # 每個來源各自記錄 (指令, 收到的時間)，互不覆蓋。
+        self.commands = {source: ((0.0, 0.0), 0.0) for source in self.drive_sources}
         if self.drive_enabled:
-            drive_topic = drive_topics[drive_source]
-            self.drive_subscription = self.create_subscription(
-                Twist, drive_topic, self.receive_command, 1)
-            self.get_logger().info(f"Drive input: {drive_topic}")
+            self.drive_subscriptions = [
+                self.create_subscription(
+                    Twist, DRIVE_TOPICS[source],
+                    lambda message, source=source: self.receive_command(source, message), 1)
+                for source in self.drive_sources
+            ]
+            self.get_logger().info(
+                "Drive input: " + " > ".join(DRIVE_TOPICS[source] for source in self.drive_sources))
         separation = self.get_parameter("wheel_separation").value
         diameter = self.get_parameter("wheel_diameter").value
         ratio = self.get_parameter("gear_ratio").value
@@ -97,13 +121,13 @@ class TecoOdometry(Node):
         self.reconnect_after = 0.0
         self.create_timer(0.04, self.update)
 
-    def receive_command(self, message):
+    def receive_command(self, source, message):
         linear = message.linear.x
         angular = message.angular.z
         if not math.isfinite(linear) or not math.isfinite(angular):
             linear = angular = 0.0
-        self.command = (min(0.12, max(-0.12, linear)), min(0.35, max(-0.35, angular)))
-        self.command_time = time.monotonic()
+        command = (min(0.12, max(-0.12, linear)), min(0.35, max(-0.35, angular)))
+        self.commands[source] = (command, time.monotonic())
 
     def send_drive(self, linear, angular, force=False):
         if not self.drive_enabled or not self.port.is_open:
@@ -121,8 +145,7 @@ class TecoOdometry(Node):
             -(linear - half_turn) / self.metres_per_rpm))
 
     def stop(self, repeat=STOP_FRAME_ON_ERROR):
-        self.command = (0.0, 0.0)
-        self.command_time = 0.0
+        self.commands = {source: ((0.0, 0.0), 0.0) for source in self.drive_sources}
         self.stop_frames = 0
         if not self.drive_enabled or not self.port.is_open:
             return
@@ -145,8 +168,8 @@ class TecoOdometry(Node):
             right = read_rpm(self.port, 1) * self.metres_per_rpm
             left = -read_rpm(self.port, 2) * self.metres_per_rpm
             if self.drive_enabled:
-                command = self.command if time.monotonic() - self.command_time <= 0.35 else (0.0, 0.0)
-                self.send_drive(*command)
+                self.send_drive(*select_command(
+                    self.commands, self.drive_sources, time.monotonic()))
         except (OSError, ValueError) as error:
             self.last_time = None
             self.stop()

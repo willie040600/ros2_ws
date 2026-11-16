@@ -24,7 +24,7 @@ def generate_launch_description():
         DeclareLaunchArgument("odom", default_value="true"),
         DeclareLaunchArgument("imu", default_value="true"),
         DeclareLaunchArgument("drive", default_value="true"),
-        DeclareLaunchArgument("drive_source", default_value="keyboard", choices=["keyboard", "nav2"]),
+        DeclareLaunchArgument("drive_source", default_value="keyboard", choices=["keyboard", "nav2", "both"]),
         DeclareLaunchArgument("wheel_odom_topic", default_value="/odom"),
         DeclareLaunchArgument("publish_wheel_tf", default_value="true"),
         DeclareLaunchArgument("base_port", default_value="/dev/ttyS0"),

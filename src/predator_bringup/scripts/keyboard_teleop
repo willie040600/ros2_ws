@@ -23,29 +23,51 @@ DIRECTIONS = {
 }
 
 
+# 底盤以 drive_source:=both 啟動時，鍵盤只要還在發送（零速也算）就會壓過 Nav2。
+# 所以放開按鍵後只續發一小段零速就靜默，把控制權讓回去。
+MOVE_HOLD = 0.25     # 收到一次按鍵後維持移動的秒數，靠鍵盤連發延長
+RELEASE_HOLD = 0.5   # 放開方向鍵後續發零速的秒數，確保車子停妥
+STOP_HOLD = 3.0      # 空白鍵（或其他非方向鍵）後續發零速的秒數，按住可一直停著
+
+
 def keyboard(screen, publisher):
     screen.keypad(True)
     screen.timeout(50)
 
-    active_until = 0.0
+    active_until = 0.0    # 在這之前送移動指令
+    publish_until = 0.0   # 在這之前持續發送，之後靜默
     motion = (0.0, 0.0)
     while rclpy.ok():
+        now = time.monotonic()
         height, width = screen.getmaxyx()
         if height >= 2 and width >= 2:
             screen.erase()
             screen.addnstr(0, 0, "WASD / arrows: move | Space: stop | Q: quit", width - 1)
             state = "Drive connected" if publisher.get_subscription_count() else "Drive disabled or offline"
             screen.addnstr(1, 0, state, width - 1)
+            if height >= 3:
+                if now < active_until:
+                    control = "Keyboard: driving"
+                elif now < publish_until:
+                    control = "Keyboard: holding stop"
+                else:
+                    control = "Keyboard: idle (Nav2 may drive in both mode)"
+                screen.addnstr(2, 0, control, width - 1)
             screen.refresh()
         key = screen.getch()
         if key in (ord("q"), ord("Q"), 27):
             return
+        now = time.monotonic()
         if key in DIRECTIONS:
             motion = DIRECTIONS[key]
-            active_until = time.monotonic() + 0.25
+            active_until = now + MOVE_HOLD
+            publish_until = max(publish_until, active_until + RELEASE_HOLD)
         elif key != -1:
             active_until = 0.0
-        linear, angular = motion if time.monotonic() < active_until else (0.0, 0.0)
+            publish_until = now + STOP_HOLD
+        if now >= publish_until:
+            continue
+        linear, angular = motion if now < active_until else (0.0, 0.0)
         message = Twist()
         message.linear.x = linear
         message.angular.z = angular
