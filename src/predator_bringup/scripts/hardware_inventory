@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+import rclpy
+from rclpy.node import Node
+
+
+def read_attribute(path):
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""
+
+
+def status(name, hardware_id, message, level=DiagnosticStatus.OK, **values):
+    return DiagnosticStatus(
+        name=f"predator/{name}",
+        hardware_id=hardware_id,
+        level=level,
+        message=message,
+        values=[KeyValue(key=key, value=value) for key, value in values.items()],
+    )
+
+
+class HardwareInventory(Node):
+    def __init__(self):
+        super().__init__("hardware_inventory")
+        self.publisher = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
+        self.timer = self.create_timer(2.0, self.publish_inventory)
+
+    def publish_inventory(self):
+        report = DiagnosticArray()
+        report.header.stamp = self.get_clock().now().to_msg()
+        for device in sorted(Path("/sys/bus/usb/devices").glob("*")):
+            vendor = read_attribute(device / "idVendor")
+            product_id = read_attribute(device / "idProduct")
+            if vendor and product_id:
+                report.status.append(status(
+                    f"usb/{device.name}", f"{vendor}:{product_id}", "Detected",
+                    product=read_attribute(device / "product"),
+                ))
+        for port in sorted(Path("/dev/serial/by-id").glob("*")):
+            if port.exists():
+                readable = os.access(port, os.R_OK)
+                writable = os.access(port, os.W_OK)
+                report.status.append(status(
+                    f"serial/{port.name}", str(port),
+                    "Accessible" if readable and writable else "Serial permissions missing",
+                    DiagnosticStatus.OK if readable and writable else DiagnosticStatus.WARN,
+                    device=str(port.resolve()),
+                ))
+        for interface in sorted(Path("/sys/class/net").glob("*")):
+            if interface.name != "lo":
+                carrier = read_attribute(interface / "carrier")
+                report.status.append(status(
+                    f"network/{interface.name}", interface.name,
+                    "Link up" if carrier == "1" else "Link down",
+                    operstate=read_attribute(interface / "operstate"),
+                ))
+        self.publisher.publish(report)
+
+
+def main():
+    rclpy.init()
+    node = HardwareInventory()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()

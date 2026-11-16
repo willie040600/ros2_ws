@@ -1,0 +1,17 @@
+# colcon 建置產物
+build/
+install/
+log/
+
+# 從 APT 下載的 Jazzy 執行環境（約 199 MB 的二進位檔，可重新下載）
+.mapping-runtime/
+
+# Python
+__pycache__/
+*.pyc
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+*~

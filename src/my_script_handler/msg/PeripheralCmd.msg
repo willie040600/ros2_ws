@@ -1,0 +1,2 @@
+uint16 action_type_id
+uint16 status_id

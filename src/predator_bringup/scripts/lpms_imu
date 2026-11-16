@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+import math
+import struct
+import time
+
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+import serial
+from sensor_msgs.msg import Imu
+
+
+DEFAULT_PORT = (
+    "/dev/serial/by-id/"
+    "usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0"
+)
+
+
+def payloads(buffer):
+    while buffer:
+        start = buffer.find(b":")
+        if start < 0:
+            buffer.clear()
+            return
+        del buffer[:start]
+        if len(buffer) < 7:
+            return
+        device, command, size = struct.unpack_from("<HHH", buffer, 1)
+        if size not in (80, 92) or command != 9:
+            del buffer[0]
+            continue
+        end = 7 + size
+        if len(buffer) < end + 4:
+            return
+        payload = bytes(buffer[7:end])
+        checksum = int.from_bytes(buffer[end:end + 2], "little")
+        if buffer[end + 2:end + 4] != b"\r\n" or checksum != (device + command + size + sum(payload)) & 0xffff:
+            del buffer[0]
+            continue
+        del buffer[:end + 4]
+        yield payload
+
+
+class LpmsImu(Node):
+    def __init__(self):
+        super().__init__("lpms_imu")
+        self.declare_parameter("port", DEFAULT_PORT)
+        self.port = serial.Serial(baudrate=115200, timeout=0, exclusive=True)
+        self.port.dtr = False
+        self.port.rts = False
+        self.port.port = self.get_parameter("port").value
+        self.buffer = bytearray()
+        self.retry_at = 0.0
+        self.publisher = self.create_publisher(Imu, "imu/data_raw", qos_profile_sensor_data)
+        self.gyro_publisher = self.create_publisher(Imu, "imu/gyro", qos_profile_sensor_data)
+        self.next_gyro_update = 0.0
+        self.create_timer(0.01, self.poll)
+
+    def poll(self):
+        try:
+            if not self.port.is_open:
+                if time.monotonic() < self.retry_at:
+                    return
+                self.port.open()
+                self.buffer.clear()
+            self.buffer.extend(self.port.read(4096))
+        except OSError as error:
+            self.port.close()
+            self.retry_at = time.monotonic() + 1.0
+            self.get_logger().warning(str(error), throttle_duration_sec=5.0)
+            return
+
+        for payload in payloads(self.buffer):
+            gx, gy, gz, ax, ay, az = struct.unpack_from("<6f", payload, 4)
+            if not all(map(math.isfinite, (gx, gy, gz, ax, ay, az))):
+                continue
+            message = Imu()
+            message.header.stamp = self.get_clock().now().to_msg()
+            message.header.frame_id = "imu_link"
+            message.orientation_covariance[0] = -1.0
+            message.angular_velocity.x = gx
+            message.angular_velocity.y = gy
+            message.angular_velocity.z = gz
+            for axis in (0, 4, 8):
+                message.angular_velocity_covariance[axis] = 0.0025
+            message.linear_acceleration.x = ax * 9.80665
+            message.linear_acceleration.y = ay * 9.80665
+            message.linear_acceleration.z = az * 9.80665
+            self.publisher.publish(message)
+
+            now = time.monotonic()
+            if now >= self.next_gyro_update:
+                self.next_gyro_update = now + 0.04
+                # Match the yaw-rate deadband used by ROS 1 odom_control.
+                message.angular_velocity.z = 0.0 if abs(gz) <= 0.01 else gz
+                self.gyro_publisher.publish(message)
+
+
+def main():
+    rclpy.init()
+    node = LpmsImu()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.port.close()
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()

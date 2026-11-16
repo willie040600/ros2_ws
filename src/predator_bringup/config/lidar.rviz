@@ -1,0 +1,35 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Enabled: true
+      Name: Grid
+      Plane Cell Count: 20
+      Cell Size: 1
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Enabled: true
+      Name: SICK TiM scan
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Size (Pixels): 3
+      Style: Points
+      Value: true
+  Enabled: true
+  Global Options:
+    Fixed Frame: cloud
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: TopDownOrtho
+      Scale: 35
+      X: 0
+      Y: 0
