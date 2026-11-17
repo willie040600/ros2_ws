@@ -18,11 +18,11 @@ teleop_collision_monitor:
     stop_pub_timeout: 3600.0
     polygons:
     - FootprintApproach
-    # 以半徑 0.22 m 的圓（與 Nav2 成本地圖的 robot_radius 相同）模擬沿指令前進，
+    # 以車體外形（40×40 cm 方形，與 Nav2 成本地圖的 footprint 相同）模擬沿指令前進，
     # 預計 1.2 秒內會碰撞時降速，貼近障礙物時停車。
     FootprintApproach:
-      type: circle
-      radius: 0.22
+      type: polygon
+      points: "[[0.2, 0.2], [0.2, -0.2], [-0.2, -0.2], [-0.2, 0.2]]"
       action_type: approach
       time_before_collision: 1.2
       simulation_time_step: 0.1
