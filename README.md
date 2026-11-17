@@ -121,6 +121,11 @@ ros2 run predator_bringup keyboard_teleop
 要按住按鍵才會持續移動，放開後車子會停。畫面第二行顯示底盤是否有訂閱鍵盤指令，
 第三行顯示鍵盤目前是 `driving`、`holding stop` 還是 `idle`。
 
+鍵盤指令預設會先經過碰撞監控（`teleop_safety:=true`）：以半徑 0.22 m 的圓模擬車子沿指令前進，
+預計 1.2 秒內會撞到光達看到的障礙物時降速，貼近時停車。碰撞監控需要光達資料，所以
+`lidar:=false` 時鍵盤指令會全部被擋下。車輪架高、沒有光達的測試才用 `teleop_safety:=false`
+關閉。光達只看得到前方，**按 `S` 倒車時沒有任何保護**。
+
 ## 建圖
 
 Cartographer 2D 使用 `/scan` 和 EKF 輸出的 `/odometry/filtered`：
@@ -162,6 +167,12 @@ ros2 launch predator_bringup robot.launch.py odom:=true drive:=true drive_source
 ```
 
 想先測試 Nav2 而不讓車子移動，把 `drive:=true` 改成 `drive:=false`。
+
+Nav2 不會讓車子倒車，因為光達只看得到前方 180°，後方沒有感測器：
+
+- MPPI 的 `vx_min` 與速度平滑器的線速度下限都是 0。
+- 恢復行為不載入 `backup`，行為樹使用 `predator_bringup/behavior_trees` 內拿掉 BackUp 的版本。
+  卡住時依序清除成本地圖、原地旋轉、等待。
 
 這個指令只用輪速里程計，所以關掉 IMU。要用 IMU 修正轉向（例如輪子打滑時），
 改用 `ekf:=true` 並開啟 IMU：
@@ -243,7 +254,7 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 
 使用時要注意：
 
-- 鍵盤指令不經過碰撞監控，接手時不會自動避障。
+- 兩個來源各自經過碰撞監控後才進入底盤仲裁，鍵盤接手時一樣會在障礙物前降速。
 - Nav2 不知道被鍵盤接手，放開按鍵後會繼續往原目標前進。要完全接管，先在 RViz2 取消目標。
 - `keyboard` 與 `nav2` 兩種模式各自只訂閱一個來源，切換模式要重新啟動底盤。
 
@@ -260,6 +271,7 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 | `odom` | `true` | 啟動底盤節點 `odom_control` |
 | `drive` | `true` | 允許送出馬達指令。`false` 時只讀輪速 |
 | `drive_source` | `keyboard` | 速度指令來源：`keyboard`、`nav2` 或 `both` |
+| `teleop_safety` | `true` | 鍵盤指令先經過碰撞監控。需要光達；`false` 時鍵盤直接進底盤 |
 | `base_port` | `/dev/ttyS0` | 底盤序列埠 |
 | `wheel_odom_topic` | `/odom` | 輪速里程計的話題名稱。`ekf:=true` 時固定為 `/wheel/odom` |
 | `publish_wheel_tf` | `true` | 由底盤節點發佈 `odom → base_link`。`ekf:=true` 時固定為 `false` |
@@ -295,7 +307,7 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 
 | 話題 | 發佈者 | 說明 |
 |---|---|---|
-| `/scan` | `sick_scan_xd` | 光達掃描，角度 −1.57 到 +1.57 rad |
+| `/scan` | `sick_scan_xd` | 光達掃描，角度 −1.57 到 +1.57 rad，`range_min` 0.05 m |
 | `/odom` | `odom_control`，或 `ekf:=true` 時的 `ekf_filter_node` | Nav2 與 AMCL 使用的里程計 |
 | `/wheel/odom` | `odom_control` | 輪速里程計，只在 `ekf:=true` 或建圖時使用 |
 | `/odometry/filtered` | `ekf_filter_node` | 建圖時融合後的里程計 |
@@ -303,14 +315,17 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 | `/imu/gyro` | `lpms_imu` | 給 EKF 使用的偏航角速度 |
 | `/diagnostics` | `hardware_inventory` | 設備是否存在與存取權限 |
 | `keyboard/cmd_vel` | `keyboard_teleop` | 鍵盤速度指令 |
+| `keyboard/cmd_vel_safe` | `teleop_collision_monitor` | 經過碰撞監控的鍵盤指令 |
 | `/nav2/cmd_vel_safe` | Nav2 碰撞監控 | 導航速度指令 |
 
-Nav2 的速度指令依序經過控制器、速度平滑器和碰撞監控，最後才到底盤：
+兩個來源各自經過碰撞監控，再由底盤節點依優先序選用（鍵盤優先）：
 
 ```text
 controller ─ cmd_vel_nav ─▶ velocity_smoother ─ cmd_vel_smoothed ─▶ collision_monitor ─ /nav2/cmd_vel_safe ─▶ odom_control
-keyboard_teleop ─ keyboard/cmd_vel ──────────────────────────────────────────────────────────────────────▶ odom_control
+keyboard_teleop ─ keyboard/cmd_vel ─▶ teleop_collision_monitor ─ keyboard/cmd_vel_safe ──────────────────▶ odom_control
 ```
+
+`teleop_safety:=false` 時鍵盤指令跳過 `teleop_collision_monitor`，直接送到 `odom_control`。
 
 座標關係為 `map → odom → base_link`，`base_link` 底下有 `cloud`（光達）與 `imu_link`（IMU）。
 `odom → base_link` 預設由 `odom_control` 發佈，`ekf:=true` 或建圖時改由 EKF 發佈，
@@ -318,7 +333,9 @@ keyboard_teleop ─ keyboard/cmd_vel ──────────────�
 
 底盤節點對所有來源套用相同的保護：
 
-- 線速度限制在 ±0.12 m/s，角速度限制在 ±0.35 rad/s。
+- 線速度限制在 ±0.12 m/s，角速度限制在 ±0.35 rad/s（`odom_control` 的 `max_linear_velocity`、
+  `max_angular_velocity` 參數）。Nav2 的 MPPI、速度平滑器與旋轉恢復行為都設成相同的上限，
+  改上限時要一起改 `config/teco_nav2_mppi.yaml`。
 - 超過 0.35 秒沒收到新指令就送零速。
 - 停車時連續送出多個零速框，避免單一框遺失造成車子繼續移動。
 
@@ -374,6 +391,19 @@ IMU 的 `/dev/ttyUSB*` 編號會隨插拔順序改變，`lpms_imu` 用 `/dev/ser
 **`keyboard_teleop` 顯示 `Drive disabled or offline`。** 底盤沒有訂閱鍵盤指令。
 確認底盤是用 `drive:=true` 啟動，而且 `drive_source` 是 `keyboard` 或 `both`。
 
+**鍵盤顯示 `Drive connected` 但車子不動或很慢。** 鍵盤指令會經過碰撞監控：光達沒在跑時全部擋下，
+前方有障礙物時降速或停車。先確認光達有資料：
+
+```bash
+ros2 topic hz /scan
+```
+
+再按住 `W`，看碰撞監控輸出的速度。`linear.x` 比鍵盤的 0.10 小，代表正在因障礙物降速：
+
+```bash
+ros2 topic echo /keyboard/cmd_vel_safe --field linear.x
+```
+
 **Nav2 有規劃路徑但車子不動。** 確認底盤的 `drive_source` 是 `nav2` 或 `both`，
 並檢查碰撞監控是否有輸出：
 
@@ -395,7 +425,9 @@ ping -c 3 192.168.0.20
 - 導航用的 `ekf:=true` 已在實車上確認接線與原地轉向，還沒實際跑過 Nav2 導航。
 - IMU 的偏航角速度已確認與輪速同號（2026-11-16，`imu_roll:=0.0`，原地左右轉各約 300°，
   兩者相差 2% 以內）。IMU 的姿態、加速度和安裝位置尚未校正。
-- 鍵盤指令不經過碰撞監控。
+- 碰撞監控只看得到前方 180°，鍵盤倒車（`S`）沒有保護。
+- 鍵盤碰撞監控與 Nav2 不倒車的設定，只用模擬底盤與假光達測過，還沒在實車上驗證。
+- Nav2 速度平滑器與 MPPI 的加速度限制仍是原本的值，要等量到底盤實際加減速後再調。
 - 手把只會發佈 `/joy`，沒有接到馬達控制。
 
 ## 授權

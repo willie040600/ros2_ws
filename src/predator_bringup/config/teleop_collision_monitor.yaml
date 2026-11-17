@@ -1,0 +1,37 @@
+# 鍵盤指令專用的碰撞監控，由 robot.launch.py 在 teleop_safety:=true 時啟動。
+#   keyboard_teleop → keyboard/cmd_vel → teleop_collision_monitor → keyboard/cmd_vel_safe → odom_control
+# 與 Nav2 自己的 collision_monitor 分開，沒有啟動 Nav2 時也有效。
+# 光達沒有資料時，碰撞監控會停車，所以鍵盤指令需要光達在跑。
+teleop_collision_monitor:
+  ros__parameters:
+    base_frame_id: base_link
+    odom_frame_id: odom
+    cmd_vel_in_topic: keyboard/cmd_vel
+    cmd_vel_out_topic: keyboard/cmd_vel_safe
+    state_topic: teleop_collision_monitor_state
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    # 不需要 odom → base_link，只用光達到 base_link 的固定 TF。
+    base_shift_correction: false
+    # 按住空白鍵時鍵盤會一直送零速，零速要持續轉發才能壓過 Nav2；
+    # 鍵盤靜默時碰撞監控也不會再輸出，所以設很長不影響交還控制權。
+    stop_pub_timeout: 3600.0
+    polygons:
+    - FootprintApproach
+    # 以半徑 0.22 m 的圓（與 Nav2 成本地圖的 robot_radius 相同）模擬沿指令前進，
+    # 預計 1.2 秒內會碰撞時降速，貼近障礙物時停車。
+    FootprintApproach:
+      type: circle
+      radius: 0.22
+      action_type: approach
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      min_points: 6
+      visualize: false
+      enabled: true
+    observation_sources:
+    - scan
+    scan:
+      type: scan
+      topic: /scan
+      enabled: true

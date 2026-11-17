@@ -81,6 +81,13 @@ class TecoOdometry(Node):
         self.declare_parameter("enable_drive", False)
         self.declare_parameter("drive_source", "keyboard")
         self.declare_parameter("publish_tf", True)
+        # 所有指令來源共用的速度上限；Nav2 的 MPPI、速度平滑器與恢復行為要設成相同的值。
+        self.declare_parameter("max_linear_velocity", 0.12)
+        self.declare_parameter("max_angular_velocity", 0.35)
+        self.max_linear = self.get_parameter("max_linear_velocity").value
+        self.max_angular = self.get_parameter("max_angular_velocity").value
+        if not all(math.isfinite(value) and value > 0 for value in (self.max_linear, self.max_angular)):
+            raise ValueError("max_linear_velocity and max_angular_velocity must be positive and finite")
         self.drive_enabled = self.get_parameter("enable_drive").value
         self.stop_frames = 0
         drive_source = self.get_parameter("drive_source").value
@@ -96,8 +103,10 @@ class TecoOdometry(Node):
                     lambda message, source=source: self.receive_command(source, message), 1)
                 for source in self.drive_sources
             ]
+            # 印出重新映射後的實際話題，例如鍵盤經過碰撞監控時是 /keyboard/cmd_vel_safe。
             self.get_logger().info(
-                "Drive input: " + " > ".join(DRIVE_TOPICS[source] for source in self.drive_sources))
+                "Drive input: " + " > ".join(sub.topic_name for sub in self.drive_subscriptions)
+                + f" (limits {self.max_linear:.2f} m/s, {self.max_angular:.2f} rad/s)")
         separation = self.get_parameter("wheel_separation").value
         diameter = self.get_parameter("wheel_diameter").value
         ratio = self.get_parameter("gear_ratio").value
@@ -126,7 +135,8 @@ class TecoOdometry(Node):
         angular = message.angular.z
         if not math.isfinite(linear) or not math.isfinite(angular):
             linear = angular = 0.0
-        command = (min(0.12, max(-0.12, linear)), min(0.35, max(-0.35, angular)))
+        command = (min(self.max_linear, max(-self.max_linear, linear)),
+                   min(self.max_angular, max(-self.max_angular, angular)))
         self.commands[source] = (command, time.monotonic())
 
     def send_drive(self, linear, angular, force=False):
