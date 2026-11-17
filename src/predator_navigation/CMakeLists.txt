@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(predator_navigation)
+
+find_package(ament_cmake REQUIRED)
+
+install(DIRECTORY launch config maps behavior_trees DESTINATION share/${PROJECT_NAME})
+
+ament_package()

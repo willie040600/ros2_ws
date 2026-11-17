@@ -11,7 +11,6 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
-  <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>nav2_collision_monitor</exec_depend>
   <exec_depend>odombase</exec_depend>

@@ -6,7 +6,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    map_path = get_package_share_path("predator_bringup") / "maps" / "teco_gmapping.yaml"
+    map_path = get_package_share_path("predator_navigation") / "maps" / "teco_gmapping.yaml"
     return LaunchDescription([
         DeclareLaunchArgument("map", default_value=str(map_path)),
         Node(

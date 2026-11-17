@@ -34,7 +34,7 @@ TECO 兩輪差速底盤的 ROS 2 Jazzy 工作區，執行在 Ubuntu 24.04 的車
 ## 環境需求
 
 - Ubuntu 24.04，ROS 2 Jazzy
-- 工作區必須放在 `~/ros2_ws`。`teco_navigation.launch.py` 用這個路徑尋找預設的地圖與 Nav2 設定。
+- 工作區可以放在任何位置。下面的指令以 `~/ros2_ws` 為例。
 
 安裝相依套件：
 
@@ -143,13 +143,19 @@ ros2 launch predator_bringup mapping.launch.py drive:=true
 地圖還在發佈時，在另一個終端機儲存：
 
 ```bash
-ros2 run nav2_map_server map_saver_cli -f ~/ros2_ws/maps/teco_new --fmt pgm --ros-args -p map_subscribe_transient_local:=true -p save_map_timeout:=8.0
+ros2 run nav2_map_server map_saver_cli -f ~/ros2_ws/src/predator_navigation/maps/teco_new --fmt pgm --ros-args -p map_subscribe_transient_local:=true -p save_map_timeout:=8.0
 ```
 
-載入既有地圖（預設為 `predator_bringup/maps/teco_gmapping.yaml`）：
+新地圖要重新建置 `predator_navigation` 才會安裝；在那之前可以用 `map:=` 指定完整路徑：
 
 ```bash
-ros2 launch predator_bringup map.launch.py
+cd ~/ros2_ws && colcon build --symlink-install --packages-select predator_navigation
+```
+
+載入既有地圖（預設為 `predator_navigation/maps/teco_gmapping.yaml`）：
+
+```bash
+ros2 launch predator_navigation map.launch.py
 ```
 
 載入地圖前先停止即時建圖，避免兩個節點同時發佈 `/map`。
@@ -171,7 +177,7 @@ ros2 launch predator_bringup robot.launch.py odom:=true drive:=true drive_source
 Nav2 不會讓車子倒車，因為光達只看得到前方 180°，後方沒有感測器：
 
 - MPPI 的 `vx_min` 與速度平滑器的線速度下限都是 0。
-- 恢復行為不載入 `backup`，行為樹使用 `predator_bringup/behavior_trees` 內拿掉 BackUp 的版本。
+- 恢復行為不載入 `backup`，行為樹使用 `predator_navigation/behavior_trees` 內拿掉 BackUp 的版本。
   卡住時依序清除成本地圖、原地旋轉、等待。
 
 這個指令只用輪速里程計，所以關掉 IMU。要用 IMU 修正轉向（例如輪子打滑時），
@@ -189,7 +195,7 @@ ros2 launch predator_bringup robot.launch.py odom:=true drive:=true drive_source
 第二個終端機啟動 Nav2 與 RViz2：
 
 ```bash
-ros2 launch nav2_bringup teco_navigation.launch.py
+ros2 launch predator_navigation navigation.launch.py
 ```
 
 啟動後的步驟：
@@ -198,14 +204,14 @@ ros2 launch nav2_bringup teco_navigation.launch.py
 2. 確認光達掃描與地圖重合。
 3. 用 **Nav2 Goal** 指定目標。
 
-預設使用 `maps/teco_20261112_215618.yaml` 與 `config/teco_nav2_mppi.yaml`。
-指定其他地圖或設定：
+預設使用 `predator_navigation` 套件內的 `maps/teco_20261112_215618.yaml` 與
+`config/teco_nav2_mppi.yaml`。指定其他地圖或設定：
 
 ```bash
-ros2 launch nav2_bringup teco_navigation.launch.py map:=/完整路徑/地圖.yaml params_file:=/完整路徑/設定.yaml
+ros2 launch predator_navigation navigation.launch.py map:=/完整路徑/地圖.yaml params_file:=/完整路徑/設定.yaml
 ```
 
-`config/teco_nav2.yaml` 是使用 DWB 控制器的原地測試設定。它的碰撞監控輸出到
+`predator_navigation/config/teco_nav2.yaml` 是使用 DWB 控制器的原地測試設定。它的碰撞監控輸出到
 `cmd_vel` 而不是 `/nav2/cmd_vel_safe`，底盤不會收到指令，車子不會移動。
 
 實車導航前，先取消任何現有目標並停止舊的 Nav2 和底盤程序，確認車身外廓
@@ -294,12 +300,12 @@ Nav2 和 `keyboard_teleop` 照前面的方式各自啟動。
 負責，輸出到 `/odometry/filtered`。`robot.launch.py` 的 `imu_x`、`imu_roll`、`lidar_x`
 等安裝位置參數也可以在這個啟動檔使用。`ekf` 參數在建圖時無效。
 
-### `teco_navigation.launch.py`
+### `predator_navigation` 的 `navigation.launch.py`
 
 | 參數 | 預設值 | 說明 |
 |---|---|---|
-| `map` | `~/ros2_ws/maps/teco_20261112_215618.yaml` | 地圖 YAML |
-| `params_file` | `~/ros2_ws/config/teco_nav2_mppi.yaml` | Nav2 設定 |
+| `map` | 套件內 `maps/teco_20261112_215618.yaml` | 地圖 YAML |
+| `params_file` | 套件內 `config/teco_nav2_mppi.yaml` | Nav2 設定 |
 | `rviz` | `True` | 啟動 RViz2 |
 | `use_sim_time` | `False` | 使用模擬時間 |
 
@@ -335,7 +341,7 @@ keyboard_teleop ─ keyboard/cmd_vel ─▶ teleop_collision_monitor ─ keyboar
 
 - 線速度限制在 ±0.12 m/s，角速度限制在 ±0.35 rad/s（`odom_control` 的 `max_linear_velocity`、
   `max_angular_velocity` 參數）。Nav2 的 MPPI、速度平滑器與旋轉恢復行為都設成相同的上限，
-  改上限時要一起改 `config/teco_nav2_mppi.yaml`。
+  改上限時要一起改 `predator_navigation/config/teco_nav2_mppi.yaml`。
 - 超過 0.35 秒沒收到新指令就送零速。
 - 停車時連續送出多個零速框，避免單一框遺失造成車子繼續移動。
 
@@ -356,18 +362,17 @@ keyboard_teleop ─ keyboard/cmd_vel ─▶ teleop_collision_monitor ─ keyboar
 
 ```text
 ros2_ws/
-├── config/                  Nav2 設定（MPPI 版與 DWB 版）
-├── maps/                    Cartographer 建出的地圖
-├── setup_mapping.bash       每個終端機都要 source 的環境設定
+├── setup_mapping.bash         每個終端機都要 source 的環境設定
 └── src/
-    ├── predator_bringup/    啟動檔、鍵盤遙控、IMU 驅動、硬體盤點、EKF 與 Cartographer 設定
-    ├── odombase/            TECO 底盤驅動與輪速里程計
-    ├── my_script_handler/   由 ROS 1 移植的訊息與服務型別
-    ├── nav2_bringup/        Nav2 啟動檔，加上 teco_navigation.launch.py
+    ├── predator_bringup/      硬體啟動、建圖、鍵盤遙控、IMU 驅動、硬體盤點、EKF 與 Cartographer 設定
+    ├── predator_navigation/   地圖、Nav2 設定、行為樹、導航與地圖伺服器啟動檔
+    ├── odombase/              TECO 底盤驅動與輪速里程計
+    ├── my_script_handler/     由 ROS 1 移植的訊息與服務型別
     └── nav2_mppi_controller/  Nav2 MPPI 控制器原始碼，編譯選項關閉 AVX
 ```
 
-`predator_bringup/maps` 內的 `0121` 和 `teco_gmapping` 是從 ROS 1 帶過來的舊地圖。
+`nav2_bringup` 使用 apt 安裝的版本。`predator_navigation/maps` 內的 `0121` 和
+`teco_gmapping` 是從 ROS 1 帶過來的舊地圖。
 
 `my_script_handler` 只有介面定義，沒有服務實作。型別名稱使用 PascalCase，欄位使用
 snake_case。舊 ROS 1 的 `move_base` 與 AMCL 參數沒有移植，導航改用 Nav2。
@@ -432,6 +437,6 @@ ping -c 3 192.168.0.20
 
 ## 授權
 
-- `nav2_bringup`：Apache-2.0，見 `src/nav2_bringup/LICENSE`。
 - `nav2_mppi_controller`：MIT，見 `src/nav2_mppi_controller/LICENSE.md`。
-- `predator_bringup`、`odombase`、`my_script_handler`：尚未指定授權。
+- `predator_navigation/behavior_trees`：修改自 Nav2 的行為樹，Apache-2.0。
+- `predator_bringup`、`predator_navigation`、`odombase`、`my_script_handler`：尚未指定授權。
